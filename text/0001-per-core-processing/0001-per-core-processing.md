@@ -1,6 +1,6 @@
 ## Summary
 The RFC discusses the possibility of removing inter-core dependencies in 
-Suricata.The proposed solution includes isolation of shared structures and 
+Suricata. The proposed solution includes isolation of shared structures and 
 distributing them among worker cores. Some of the shared structures, such as 
 the host table, can be offloaded to hardware. Alternatively, using local 
 evaluation for rule and IP address tracking it is also possible to limit 
@@ -27,6 +27,51 @@ based on the 3/5-tuples extracted from the traffic. RSS ensures the same flow
 is delivered to the same worker each time from both directions. However, it 
 does not guarantee to deliver two flows with a common IP address to the same
 worker. 
+
+To support the point of independent workers here are the initial measurements 
+to boost your motivation and interest. I have done following experiments where
+Suricata ran:
+
+- without rules (NSM mode)
+  - original Suricata from master branch
+  - separate memory pools (receiving buffers) for individual workers
+  - separate flow tables (receiving buffers) for individual workers
+- with rules (ET Open)
+  - original Suricata from master branch
+  - separate flow tables (receiving buffers) for individual workers
+
+The graphs below show individual variants (with and without rules). 
+The same traffic has been been trasnmitted onto Suricata for around 60 seconds 
+for each experiment. The transmit speed unit is megabits per second (Mbps).
+Suricata were configured with 4 threads.
+
+In the measurement where Suricata had disabled rules, orange line is considered
+as a baseline as that it currently unmodified Suricata. We can look at 
+the red line and see a mild improvement when each Suricata worker 
+has its' own separate memory pool for receiving packets (pktmbuf mempool in DPDK terminology). The blue line represent a modification in which each Suricata 
+worker has its own individual flow table as well as its own separate memory 
+pool (as in the previous (red) experiment). Suricata in this case greatly 
+benefits from the lockless structures as there is no need to synchronize 
+threads and efficient hash lookups with less cache misses/invalidations. 
+Compared to the baseline (10 Gbps) we can observe doubled throughput up to 
+around 20 Gbps. 
+
+![](./perf-test-per-core-rules-disabled.png)
+
+Measurement with the rules shows less exciting results with nonetheless 20%
+increase in the throughput. In this case we are only comparing Suricata master
+(Suricata without modification) denoted as a red line to per-worker flow table variant denoted as a blue line. The variant with separate mempools was omitted in this measurement because it yielded in similar results as the red line. 
+
+The doubled throughput is scaled down to 20% performance boost because 
+performance penalty caused by lock contention is smaller when Suricata is 
+"busier", i.e. when Suricata needs to do extra work, the impact of lock 
+contention is smaller as opposed to when Suricata only needs to decode 
+the packet and "note some details of it". However, dividing Suricata 
+operations into the per-worker model I believe Suricata could scale more 
+linearly as it would not result in lock contention again when adding more 
+processing threads to Suricata. 
+
+![](perf-test-per-core-rules-enabled.png)
 
 ## Detailed explanation
 Most of the Suricata tables indicate that it would be possible to isolate them 
